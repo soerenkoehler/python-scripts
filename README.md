@@ -1,2 +1,2 @@
 # python-scripts
-Collection of (small) scripts in Python3
+This is a collection of scripts in Python3. Please refer to the particular documentation in the project directories.
