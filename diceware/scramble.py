@@ -11,13 +11,15 @@ def scramble(x):
 
 
 def group(x):
-    if args.isDecode and len(x) > 4:
-        return x[0:4] + " " + group(x[4:])
+    group_size = int(args.groupSize)
+    if args.isDecode and len(x) > group_size:
+        return x[0:group_size] + " " + group(x[group_size:])
     return x
 
 
 parser = ArgumentParser("Diceware String Encode")
 parser.add_argument('-d', action='store_const', dest='isDecode', const=True)
+parser.add_argument('-g', '--group-size', action='store', dest='groupSize', default=4)
 parser.add_argument('input')
 args = parser.parse_args()
 
