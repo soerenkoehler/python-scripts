@@ -3,7 +3,7 @@
 
 from argparse import ArgumentParser
 from pathlib import Path
-from subprocess import Popen
+from subprocess import Popen, PIPE
 
 
 def parse_args():
@@ -33,30 +33,59 @@ def parse_args():
     return args
 
 
-def create_checksums():
-    cmd = ['sh',
-           '-c',
-           'find -type f -not -path "./chdiff.*.txt" | sort | xargs -i %ssum {}' % ARGS.method]
-    for directory in ARGS.create:
-        path = Path(directory)
-        print(path.resolve())
-        with open(path / SUM_FILE, "w") as out:
-            Popen(cmd, cwd=path, stdout=out).wait()
+def process_directory(directory, function):
+    path = Path(directory)
+    print("--- %s" % path.resolve())
+    function(path)
 
 
-def verify_checksums():
-    cmd = ['%ssum' % ARGS.method, '-c', '--quiet', SUM_FILE]
-    for directory in ARGS.verify:
-        path = Path(directory)
-        print(path.resolve())
-        Popen(cmd, cwd=path).wait()
+def create_checksum(path):
+    with open(path / SUM_FILE, "w") as out:
+        Popen(CMD_CREATE, cwd=path, stdout=out).wait()
+
+
+def verify_checksum(path):
+    Popen(CMD_VERIFY, cwd=path).wait()
+
+
+def get_diff_output():
+    dir1 = Path(ARGS.diff[0]).resolve()
+    dir2 = Path(ARGS.diff[1]).resolve()
+    process_directory(dir1, create_checksum)
+    process_directory(dir2, create_checksum)
+    return str(Popen(['diff',
+                      str(dir1 / SUM_FILE),
+                      str(dir2 / SUM_FILE)],
+                     stdout=PIPE).communicate()[0], encoding='ASCII')
+
+
+def main():
+    if ARGS.create:
+        for current_dir in ARGS.create:
+            process_directory(current_dir, create_checksum)
+
+    elif ARGS.verify:
+        for current_dir in ARGS.verify:
+            process_directory(current_dir, verify_checksum)
+
+    elif ARGS.diff:
+        diff = dict()
+        for entry in [line.split(maxsplit=2)
+                      for line in get_diff_output().splitlines()
+                      if line[0] in ['<', '>']]:
+            diff[entry[2]] = diff.get(entry[2], '') + entry[0]
+        for key in sorted(diff.keys()):
+            print("%s %s" % (key,
+                             "new" if diff[key] == '>' else
+                             "deleted" if diff[key] == '<'
+                             else "modified"))
 
 
 ARGS = parse_args()
 SUM_FILE = "chdiff.%s.txt" % ARGS.method
+CMD_CREATE = ['sh',
+              '-c',
+              'find -type f -not -path "./chdiff.*.txt" | sort | xargs -i %ssum {}' % ARGS.method]
+CMD_VERIFY = ['%ssum' % ARGS.method, '-c', '--quiet', SUM_FILE]
 
-if ARGS.create:
-    create_checksums()
-
-if ARGS.verify:
-    verify_checksums()
+main()
