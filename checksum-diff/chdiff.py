@@ -8,17 +8,19 @@ from subprocess import Popen, PIPE
 
 def parse_args():
     parser = ArgumentParser(description="ChDiff - a checksum based diff tool")
-    parser.add_argument("-d", "--diff", action="store", nargs=2,
-                        metavar=("DIR1", "DIR2"),
-                        help="compute difference between DIR1 and DIR2")
     parser.add_argument("-c", "--create", action="store", nargs='+',
                         metavar="DIR",
                         help="compute checksums for given DIRs")
     parser.add_argument("-v", "--verify", action="store", nargs='+',
                         metavar="DIR",
                         help="verify checksums for given DIRs")
+    parser.add_argument("-d", "--diff", action="store", nargs=2,
+                        metavar=("DIR1", "DIR2"),
+                        help="compute difference between DIR1 and DIR2")
+    parser.add_argument("-f", "--force", action="store_true",
+                        help="force recalculation of checksums (with --diff)")
     parser.add_argument("-m", "--method", action="store", default="sha256",
-                        help="the checksum method to use")
+                        help="the checksum method to use: sha256, sha512, md5")
 
     args = parser.parse_args()
 
@@ -31,32 +33,6 @@ def parse_args():
             "Must specify exactly one of --diff, --create or --verify")
 
     return args
-
-
-def process_directory(directory, function):
-    path = Path(directory)
-    print("--- %s" % path.resolve())
-    function(path)
-
-
-def create_checksum(path):
-    with open(path / SUM_FILE, "w") as out:
-        Popen(CMD_CREATE, cwd=path, stdout=out).wait()
-
-
-def verify_checksum(path):
-    Popen(CMD_VERIFY, cwd=path).wait()
-
-
-def get_diff_output():
-    dir1 = Path(ARGS.diff[0]).resolve()
-    dir2 = Path(ARGS.diff[1]).resolve()
-    process_directory(dir1, create_checksum)
-    process_directory(dir2, create_checksum)
-    return str(Popen(['diff',
-                      str(dir1 / SUM_FILE),
-                      str(dir2 / SUM_FILE)],
-                     stdout=PIPE).communicate()[0], encoding='ASCII')
 
 
 def main():
@@ -81,11 +57,51 @@ def main():
                              else "modified"))
 
 
+def process_directory(directory, function):
+    path = Path(directory)
+    print("--- %s" % path.resolve())
+    function(path)
+
+
+def get_diff_output():
+    dir1 = Path(ARGS.diff[0]).resolve()
+    dir2 = Path(ARGS.diff[1]).resolve()
+    create_checksum_for_diff(dir1)
+    create_checksum_for_diff(dir2)
+    return str(Popen(['diff',
+                      str(dir1 / SUM_FILE),
+                      str(dir2 / SUM_FILE)],
+                     stdout=PIPE).communicate()[0], encoding='ASCII')
+
+
+def create_checksum_for_diff(path):
+    if ARGS.force or is_out_of_date(path):
+        process_directory(path, create_checksum)
+    else:
+        print("--- %s : unchanged" % path.resolve())
+
+
+def is_out_of_date(path):
+    if Popen(['sh', '-c', '%s -cnewer "%s"' %
+              (FIND_BASE, str(path / SUM_FILE))],
+             cwd=path, stdout=PIPE).communicate()[0]:
+        return True
+    return False
+
+
+def create_checksum(path):
+    with open(path / SUM_FILE, "w") as out:
+        Popen(['sh', '-c', '%s | sort | xargs -i %ssum {}' %
+               (FIND_BASE, ARGS.method)],
+              cwd=path, stdout=out).wait()
+
+
+def verify_checksum(path):
+    Popen(['%ssum' % ARGS.method, '-c', '--quiet', SUM_FILE], cwd=path).wait()
+
+
 ARGS = parse_args()
-SUM_FILE = "chdiff.%s.txt" % ARGS.method
-CMD_CREATE = ['sh',
-              '-c',
-              'find -type f -not -path "./chdiff.*.txt" | sort | xargs -i %ssum {}' % ARGS.method]
-CMD_VERIFY = ['%ssum' % ARGS.method, '-c', '--quiet', SUM_FILE]
+SUM_FILE = 'chdiff.%s.txt' % ARGS.method
+FIND_BASE = 'find -type f -not -path "./chdiff.*.txt"'
 
 main()
