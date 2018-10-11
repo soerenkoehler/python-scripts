@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # pylint: disable=C0111
 
 import re
@@ -49,12 +49,16 @@ def write_pages(freefall):
             with urlopen(image[2]) as response:
                 with open(subdir / image[0], "wb") as out_image:
                     out_image.write(response.read())
-                    print(image[2])
+                    print(image[2], flush=True)
         with open(subdir / "index.html", "w") as out_page:
             out_page.write(HTML_MAIN % (
                 "%s - %s" % (von, bis),
                 "</p><p>".join(create_nav(page, len(partitions)))))
     return result
+
+
+def partition(data, step):
+    return [(i / step, data[i:i+step]) for i in range(0, len(data), step)]
 
 
 def create_nav(page, max_nav):
@@ -80,7 +84,7 @@ def scan_freefall():
     next_url = "grayff.htm"
     while next_url:
         last_url = urljoin(last_url, next_url)
-        print(last_url)
+        print(last_url, flush=True)
         with urlopen(last_url) as response:
             html = str(response.read(), encoding='ISO-8859-1')
             image, title_old, title_new, next_url = parse_freefall_page(html)
@@ -88,10 +92,6 @@ def scan_freefall():
                            title_old if title_old else title_new,
                            urljoin(last_url, image)))
     return [e for e in reversed(result)]
-
-
-def partition(data, step):
-    return [(i / step, data[i:i+step]) for i in range(0, len(data), step)]
 
 
 def parse_freefall_page(html):
