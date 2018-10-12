@@ -10,12 +10,12 @@ IMG_PER_PAGE = 10
 
 CSS_VISIBLE = "visible"
 CSS_HIDDEN = "hidden"
-HTML_INDEX_ENTRY = """<a href="ff%05d/index.html">%s - %s</a>"""
+HTML_INDEX_ENTRY = """<a href="p%05d/index.html">%s - %s</a>"""
 HTML_PAGE_ENTRY = """%s<br/>
 <img src="%s"/>"""
-HTML_PAGE_NAV = """<a href="../ff%05d/index.html" style="visibility: %s">Previous</a>
+HTML_PAGE_NAV = """<a href="../p%05d/index.html" style="visibility: %s">Previous</a>
 <span style="visibility: %s">&nbsp;-&nbsp;</span>
-<a style="visibility: %s" href="../ff%05d/index.html">Next</a>"""
+<a style="visibility: %s" href="../p%05d/index.html">Next</a>"""
 HTML_MAIN = u"""<!DOCTYPE html>
 <html>
 <head>
@@ -43,13 +43,14 @@ def write_pages(freefall):
         image_list = page[1]
         von, bis = image_list[0][1], image_list[-1][1]
         result.append(HTML_INDEX_ENTRY % (page[0], von, bis))
-        subdir = Path("ff%05d" % page[0])
+        subdir = Path("p%05d" % page[0])
         subdir.mkdir(parents=True, exist_ok=True)
         for image in image_list:
+            print(image[2], end='', flush=True)
             with urlopen(image[2]) as response:
                 with open(subdir / image[0], "wb") as out_image:
                     out_image.write(response.read())
-                    print(image[2], flush=True)
+                    print(' OK', flush=True)
         with open(subdir / "index.html", "w") as out_page:
             out_page.write(HTML_MAIN % (
                 "%s - %s" % (von, bis),
@@ -84,19 +85,22 @@ def scan_freefall():
     next_url = "grayff.htm"
     while next_url:
         last_url = urljoin(last_url, next_url)
-        print(last_url, flush=True)
+        print(last_url, end='', flush=True)
         with urlopen(last_url) as response:
-            html = str(response.read(), encoding='ISO-8859-1')
-            image, title_old, title_new, next_url = parse_freefall_page(html)
+            image, image_path, title_old, title_new, next_url = parse_freefall_page(
+                str(response.read(), encoding='ISO-8859-1'))
+            image_url = urljoin(last_url, image_path)
             result.append((image,
                            title_old if title_old else title_new,
-                           urljoin(last_url, image)))
+                           image_url))
+            print(" => %s" % image_url, flush=True)
     return [e for e in reversed(result)]
 
 
 def parse_freefall_page(html):
     return (
-        find(r'<img src=".*?(\w+.gif)"', html),
+        find(r'<img src=".*?(\w+\.gif)"', html),
+        find(r'<img src="(.+\.gif)"', html),
         find(r'<!-+\s(.+)\s-+>', html),
         find(r'<title>(.+)</title>', html),
         find(r'<a href="(.+)">Previous</a>', html)
