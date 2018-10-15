@@ -82,6 +82,7 @@ def create_checksum_for_diff(path):
 
 
 def is_out_of_date(path):
+    # TODO Test, ob SUM_FILE überhaupt existiert
     if Popen(['sh', '-c', '%s -cnewer "%s"' %
               (FIND_BASE, str(path / SUM_FILE))],
              cwd=path, stdout=PIPE).communicate()[0]:
