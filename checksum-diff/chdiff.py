@@ -4,21 +4,24 @@
 from argparse import ArgumentParser
 from pathlib import Path
 from subprocess import Popen, PIPE
+from os.path import exists
 
 
 def parse_args():
     parser = ArgumentParser(description="ChDiff - a checksum based diff tool")
+    parser.add_argument("-q", "--quiet", action="store_true",
+                        help="dont print progress info")
+    parser.add_argument("-f", "--force", action="store_true",
+                        help="force recalculation of checksums (with --diff)")
+    parser.add_argument("-d", "--diff", action="store", nargs=2,
+                        metavar=("DIR1", "DIR2"),
+                        help="compute difference between DIR1 and DIR2")
     parser.add_argument("-c", "--create", action="store", nargs='+',
                         metavar="DIR",
                         help="compute checksums for given DIRs")
     parser.add_argument("-v", "--verify", action="store", nargs='+',
                         metavar="DIR",
                         help="verify checksums for given DIRs")
-    parser.add_argument("-d", "--diff", action="store", nargs=2,
-                        metavar=("DIR1", "DIR2"),
-                        help="compute difference between DIR1 and DIR2")
-    parser.add_argument("-f", "--force", action="store_true",
-                        help="force recalculation of checksums (with --diff)")
     parser.add_argument("-m", "--method", action="store", default="sha256",
                         help="the checksum method to use: sha256, sha512, md5")
 
@@ -59,8 +62,9 @@ def main():
 
 def process_directory(directory, function):
     path = Path(directory)
-    print("--- %s" % path.resolve())
+    progress("%s : " % path.resolve(), end='')
     function(path)
+    progress("done")
 
 
 def get_diff_output():
@@ -68,21 +72,25 @@ def get_diff_output():
     dir2 = Path(ARGS.diff[1]).resolve()
     create_checksum_for_diff(dir1)
     create_checksum_for_diff(dir2)
-    return str(Popen(['diff',
-                      str(dir1 / SUM_FILE),
-                      str(dir2 / SUM_FILE)],
-                     stdout=PIPE).communicate()[0], encoding='ASCII')
+    return str(Popen(['diff', str(dir1 / SUM_FILE), str(dir2 / SUM_FILE)],
+                     stdout=PIPE).communicate()[0], encoding='UTF-8')
 
 
 def create_checksum_for_diff(path):
     if ARGS.force or is_out_of_date(path):
         process_directory(path, create_checksum)
     else:
-        print("--- %s : unchanged" % path.resolve())
+        progress("%s : unchanged" % path.resolve())
+
+
+def progress(text, end='\n'):
+    if not ARGS.quiet:
+        print(text, end=end, flush=True)
 
 
 def is_out_of_date(path):
-    # TODO Test, ob SUM_FILE überhaupt existiert
+    if not exists(path / SUM_FILE):
+        return True
     if Popen(['sh', '-c', '%s -cnewer "%s"' %
               (FIND_BASE, str(path / SUM_FILE))],
              cwd=path, stdout=PIPE).communicate()[0]:
@@ -92,13 +100,14 @@ def is_out_of_date(path):
 
 def create_checksum(path):
     with open(path / SUM_FILE, "w") as out:
-        Popen(['sh', '-c', '%s | sort | xargs -i %ssum {}' %
+        Popen(['sh', '-c', '%s | sort | xargs -i %ssum -b {}' %
                (FIND_BASE, ARGS.method)],
               cwd=path, stdout=out).wait()
 
 
 def verify_checksum(path):
-    Popen(['%ssum' % ARGS.method, '-c', '--quiet', SUM_FILE], cwd=path).wait()
+    Popen(['%ssum' % ARGS.method, '-b', '-c',
+           '--quiet', SUM_FILE], cwd=path).wait()
 
 
 ARGS = parse_args()
