@@ -15,14 +15,19 @@ def parse_args():
     parser.add_argument("-f", "--force", action="store_true",
                         help="for --diff and --backup: force recalculation of checksums")
     parser.add_argument("-m", "--method", action="store", default="sha256",
-                        help="the checksum method to use: sha256, sha512, md5, size")
+                        help="the checksum method to use: sha256, sha512, md5, simple")
+    parser.add_argument("-t", "--test", action="store", default="simple",
+                        help="the checksum method to use: sha256, sha512, md5, simple")
 
     parser.add_argument("--diff", action="store", nargs=2,
                         metavar=("DIR1", "DIR2"),
                         help="compute difference between DIR1 and DIR2")
+    parser.add_argument("--sync", action="store", nargs=2,
+                        metavar=("SRC", "DST"),
+                        help="sync SRC into DST (new, modified and deleted files)")
     parser.add_argument("--backup", action="store", nargs=2,
-                        metavar=("DIR1", "DIR2"),
-                        help="incrementally backup DIR1 into DIR2")
+                        metavar=("SRC", "DST"),
+                        help="backup SRC into DST (new and modified files only)")
 
     parser.add_argument("--create", action="store", nargs='+',
                         metavar="DIR",
@@ -35,11 +40,11 @@ def parse_args():
 
     main_action_count = sum(
         map(lambda x: 1 if x else 0,
-            [args.diff, args.create, args.verify]))
+            [args.diff, args.sync, args.backup, args.create, args.verify]))
 
     if main_action_count != 1:
         parser.error(
-            "Must specify exactly one of --diff, --create or --verify")
+            "Must specify exactly one of: --diff, --sync, --backup, --create, --verify")
 
     return args
 
@@ -64,6 +69,12 @@ def main():
                              "new" if diff[key] == '>' else
                              "deleted" if diff[key] == '<'
                              else "modified"))
+
+    elif ARGS.sync:
+        pass
+
+    elif ARGS.backup:
+        pass
 
 
 def process_directory(directory, function):
@@ -113,7 +124,7 @@ def create_checksum(path):
               cwd=path, stdout=out).wait()
 
 
-def verify_checksum(path): # TODO
+def verify_checksum(path):  # TODO
     Popen(['%ssum' % ARGS.method, '-b', '-c',
            '--quiet', SUM_FILE], cwd=path).wait()
 
@@ -128,7 +139,7 @@ METHODS = {
     "sha256": "sha256sum -b",
     "sha512": "sha512sum -b",
     "md5": "md5sum -b",
-    "size": "wc -c",
+    "simple": "wc -c",
 }
 
 main()
