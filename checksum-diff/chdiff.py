@@ -119,7 +119,7 @@ def is_out_of_date(path):
 
 def create_checksum(path):
     with open(path / TMP_FILE, "w") as out:
-        Popen(['sh', '-c', '%s | sort | xargs -i %s {}' %
+        Popen(['sh', '-c', '%s | sort | xargs -i %s' %
                (FIND_BASE, METHODS[ARGS.method])],
               cwd=path, stdout=out).wait()
 
@@ -136,10 +136,10 @@ TMP_FILE = 'chdiff.%s.tmp' % ARGS.method
 FIND_BASE = 'find -type f -not -path "./chdiff.*.t??"'
 
 METHODS = {
-    "sha256": "sha256sum -b",
-    "sha512": "sha512sum -b",
-    "md5": "md5sum -b",
-    "simple": "wc -c",
+    "sha256": "sha256sum -b {}",
+    "sha512": "sha512sum -b {}",
+    "md5": "md5sum -b {}",
+    "simple": "echo $(date -r {} +%s):$(wc -c {})",
 }
 
 main()
