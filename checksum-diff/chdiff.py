@@ -4,6 +4,7 @@
 from argparse import ArgumentParser
 from pathlib import Path
 from subprocess import Popen, PIPE
+from os import replace
 from os.path import exists
 from datetime import datetime
 
@@ -15,9 +16,9 @@ def parse_args():
     parser.add_argument("-f", "--force", action="store_true",
                         help="for --diff and --backup: force recalculation of checksums")
     parser.add_argument("-m", "--method", action="store", default="sha256",
-                        help="the checksum method to use: sha256, sha512, md5, simple")
-    parser.add_argument("-t", "--test", action="store", default="simple",
-                        help="the checksum method to use: sha256, sha512, md5, simple")
+                        help="the checksum method to use: sha256, sha512, md5, size")
+    parser.add_argument("-t", "--test", action="store", default="size",
+                        help="the checksum method to use: sha256, sha512, md5, size")
 
     parser.add_argument("--diff", action="store", nargs=2,
                         metavar=("DIR1", "DIR2"),
@@ -60,28 +61,21 @@ def main():
 
     elif ARGS.diff:
         diff = dict()
-        for entry in [line.split(maxsplit=2)
+        for entry in [line.split(maxsplit=2, sep=SEPARATORS[ARGS.method])
                       for line in get_diff_output().splitlines()
                       if line[0] in ['<', '>']]:
-            diff[entry[2]] = diff.get(entry[2], '') + entry[0]
+            diff[entry[1]] = diff.get(entry[1], '') + entry[0][0]
         for key in sorted(diff.keys()):
-            print("%s %s" % (key,
-                             "new" if diff[key] == '>' else
-                             "deleted" if diff[key] == '<'
-                             else "modified"))
+            print("%s %s" % ("+" if diff[key] == '>' else
+                             "-" if diff[key] == '<'
+                             else "M",
+                             key))
 
     elif ARGS.sync:
         pass
 
     elif ARGS.backup:
         pass
-
-
-def process_directory(directory, function):
-    path = Path(directory)
-    progress("begin: %s" % path.resolve())
-    function(path)
-    progress(" done: %s" % path.resolve())
 
 
 def get_diff_output():
@@ -95,10 +89,17 @@ def get_diff_output():
 
 def create_checksum_for_diff(path):
     if ARGS.force or is_out_of_date(path):
-        # TODO
         process_directory(path, create_checksum)
     else:
-        progress("%s : unchanged" % path.resolve())
+        progress("unchanged : %s" % path.resolve())
+
+
+def process_directory(directory, function):
+    path = Path(directory)
+    progress("unchanged: %s" % path.resolve())
+    progress("scanning : %s" % path.resolve())
+    function(path)
+    progress("finished : %s" % path.resolve())
 
 
 def progress(text):
@@ -119,9 +120,10 @@ def is_out_of_date(path):
 
 def create_checksum(path):
     with open(path / TMP_FILE, "w") as out:
-        Popen(['sh', '-c', '%s | sort | xargs -i %s' %
+        Popen(['sh', '-c', '%s | sort | xargs -i %s "{}"' %
                (FIND_BASE, METHODS[ARGS.method])],
               cwd=path, stdout=out).wait()
+    replace(path / TMP_FILE, path / SUM_FILE)
 
 
 def verify_checksum(path):  # TODO
@@ -136,10 +138,17 @@ TMP_FILE = 'chdiff.%s.tmp' % ARGS.method
 FIND_BASE = 'find -type f -not -path "./chdiff.*.t??"'
 
 METHODS = {
-    "sha256": "sha256sum -b {}",
-    "sha512": "sha512sum -b {}",
-    "md5": "md5sum -b {}",
-    "simple": "echo $(date -r {} +%s):$(wc -c {})",
+    "sha256": "sha256sum -b",
+    "sha512": "sha512sum -b",
+    "md5": "md5sum -b",
+    "size": "wc -c",
+}
+
+SEPARATORS = {
+    "sha256": " *./",
+    "sha512": " *./",
+    "md5": " *./",
+    "size": " ./",
 }
 
 main()
