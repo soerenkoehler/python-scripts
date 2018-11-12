@@ -24,7 +24,7 @@ HTML_MAIN = u"""<!DOCTYPE html>
 </head><body>
 <p>%s</p>
 <hr>
-<a href="http://freefall.purrsia.com/grayff.htm">&copy; http://freefall.purrsia.com/grayff.htm</a>
+<a href="http://freefall.purrsia.com/grayff.htm">&copy; http://freefall.purrsia.com</a>
 </body>
 </html>"""
 
