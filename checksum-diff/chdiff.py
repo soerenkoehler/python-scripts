@@ -5,46 +5,36 @@ from argparse import ArgumentParser
 from datetime import datetime
 from filecmp import dircmp
 from os import replace, remove
-from os.path import exists
 from pathlib import Path
 from subprocess import PIPE, Popen
 
 
 def parse_args():
     parser = ArgumentParser(description="ChDiff - a checksum based diff tool")
+
     parser.add_argument("-q", "--quiet", action="store_true",
-                        help="dont print progress info")
-    parser.add_argument("-f", "--force", action="store_true",
-                        help="with --diff, --sync and --backup: force recalculation of checksums")
+                        help="dont print log messages")
     parser.add_argument("-m", "--method", action="store", default="sha256",
                         help="the checksum method to use: sha256, sha512, md5, size")
 
-    parser.add_argument("--diff", action="store", nargs=2,
-                        metavar=("DIR1", "DIR2"),
-                        help="compute difference between DIR1 and DIR2")
-    parser.add_argument("--sync", action="store", nargs=2,
-                        metavar=("SRC", "DST"),
-                        help="sync SRC into DST (new, modified and deleted files)")
-    parser.add_argument("--backup", action="store", nargs=2,
-                        metavar=("SRC", "DST"),
-                        help="backup SRC into DST (new and modified files only)")
-
-    parser.add_argument("--create", action="store", nargs='+',
-                        metavar="DIR",
-                        help="compute checksums for given DIRs")
-    parser.add_argument("--verify", action="store", nargs='+',
-                        metavar="DIR",
-                        help="verify checksums for given DIRs")
+    cmd_group = parser.add_mutually_exclusive_group(required=True)
+    cmd_group.add_argument("--diff", action="store", nargs=2,
+                           metavar=("DIR1", "DIR2"),
+                           help="compute difference between DIR1 and DIR2")
+    cmd_group.add_argument("--sync", action="store", nargs=2,
+                           metavar=("SRC", "DST"),
+                           help="sync SRC into DST (new, modified and deleted files)")
+    cmd_group.add_argument("--backup", action="store", nargs=2,
+                           metavar=("SRC", "DST"),
+                           help="backup SRC into DST (new and modified files only)")
+    cmd_group.add_argument("--create", action="store", nargs='+',
+                           metavar="DIR",
+                           help="compute checksums for given DIRs")
+    cmd_group.add_argument("--verify", action="store", nargs='+',
+                           metavar="DIR",
+                           help="verify checksums for given DIRs")
 
     args = parser.parse_args()
-
-    main_action_count = sum(
-        map(lambda x: 1 if x else 0,
-            [args.diff, args.sync, args.backup, args.create, args.verify]))
-
-    if main_action_count != 1:
-        parser.error(
-            "Must specify exactly one of: --diff, --sync, --backup, --create, --verify")
 
     return args
 
@@ -61,8 +51,8 @@ def main():
     elif ARGS.diff:
         dir1 = Path(ARGS.diff[0]).resolve()
         dir2 = Path(ARGS.diff[1]).resolve()
-        create_checksum_for_diff(dir1)
-        create_checksum_for_diff(dir2)
+        process_directory(dir1, create_checksum)
+        process_directory(dir2, create_checksum)
         report_diff(get_checksum_diff(dir1, dir2, SUM_FILE, SUM_FILE))
         print("---")
         list_commons(Path("."),
@@ -77,17 +67,10 @@ def main():
 
 
 def list_commons(prefix, comparison):
-    for s in comparison.common_files:
-        print(prefix / s)
-    for d in comparison.subdirs.items():
-        list_commons(prefix / d[0], d[1])
-
-
-def create_checksum_for_diff(path):
-    if ARGS.force or is_out_of_date(path):
-        process_directory(path, create_checksum)
-    else:
-        log("unchanged : %s" % path.resolve())
+    for file in comparison.common_files:
+        print(prefix / file)
+    for directory in comparison.subdirs.items():
+        list_commons(prefix / directory[0], directory[1])
 
 
 def process_directory(directory, function):
@@ -101,16 +84,6 @@ def log(text):
     if not ARGS.quiet:
         now = datetime.now().replace(microsecond=0).isoformat()
         print("[%s] %s" % (now, text), flush=True)
-
-
-def is_out_of_date(path):
-    if not exists(path / SUM_FILE):
-        return True
-    if Popen(['sh', '-c', '%s -cnewer "%s"' %
-              (FIND_BASE, str(path / SUM_FILE))],
-             cwd=path, stdout=PIPE).communicate()[0]:
-        return True
-    return False
 
 
 def create_checksum(path):
@@ -143,9 +116,9 @@ def get_checksum_diff(dir1, dir2, sumfile1, sumfile2):
                                            encoding='UTF-8').splitlines()
                            if line[0] in ['<', '>']]:
         if path in diff:
-            diff[path] = 'M'
+            diff[path] = '* *'
         else:
-            diff[path] = '+' if change[0] == '>' else '-'
+            diff[path] = '< +' if change[0] == '>' else '> -'
     return diff
 
 
