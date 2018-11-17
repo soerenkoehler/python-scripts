@@ -4,7 +4,8 @@
 from argparse import ArgumentParser
 from datetime import datetime
 from filecmp import dircmp
-from os import replace, remove
+from fnmatch import fnmatchcase
+from os import remove, replace, stat
 from pathlib import Path
 from subprocess import PIPE, Popen
 
@@ -15,7 +16,8 @@ def parse_args():
     parser.add_argument("-q", "--quiet", action="store_true",
                         help="dont print log messages")
     parser.add_argument("-m", "--method", action="store", default="sha256",
-                        help="the checksum method to use: sha256, sha512, md5, size")
+                        choices=["sha256", "sha512", "md5", "size"],
+                        help="the checksum method to use")
 
     cmd_group = parser.add_mutually_exclusive_group(required=True)
     cmd_group.add_argument("--diff", action="store", nargs=2,
@@ -51,26 +53,13 @@ def main():
     elif ARGS.diff:
         dir1 = Path(ARGS.diff[0]).resolve()
         dir2 = Path(ARGS.diff[1]).resolve()
-        process_directory(dir1, create_checksum)
-        process_directory(dir2, create_checksum)
         report_diff(get_checksum_diff(dir1, dir2, SUM_FILE, SUM_FILE))
-        print("---")
-        list_commons(Path("."),
-                     dircmp(Path(ARGS.diff[0]).resolve(),
-                            Path(ARGS.diff[1]).resolve()))
 
     elif ARGS.sync:
         pass
 
     elif ARGS.backup:
         pass
-
-
-def list_commons(prefix, comparison):
-    for file in comparison.common_files:
-        print(prefix / file)
-    for directory in comparison.subdirs.items():
-        list_commons(prefix / directory[0], directory[1])
 
 
 def process_directory(directory, function):
@@ -80,10 +69,29 @@ def process_directory(directory, function):
     log("finished : %s" % path.resolve())
 
 
-def log(text):
-    if not ARGS.quiet:
-        now = datetime.now().replace(microsecond=0).isoformat()
-        print("[%s] %s" % (now, text), flush=True)
+def get_checksum_diff(dir1, dir2, sumfile1, sumfile2):
+    process_directory(dir1, create_checksum)
+    process_directory(dir2, create_checksum)
+    diff = dict()
+    for (change, path) in [line.split(maxsplit=2,
+                                      sep=SEPARATORS[ARGS.method])
+                           for line in str(Popen(['diff',
+                                                  str(dir1 / sumfile1),
+                                                  str(dir2 / sumfile2)],
+                                                 stdout=PIPE).communicate()[0],
+                                           encoding='UTF-8').splitlines()
+                           if line[0] in ['<', '>']]:
+        normalized_path = Path(path)
+        if normalized_path in diff:
+            diff[normalized_path] = '* *'
+        else:
+            diff[normalized_path] = '< +' if change[0] == '>' else '> -'
+    for (path, change) in get_timestamp_diff(Path("."), dircmp(dir1, dir2)).items():
+        if path in diff:
+            diff[path] = change[0:2] + "*"
+        else:
+            diff[path] = change
+    return diff
 
 
 def create_checksum(path):
@@ -105,21 +113,18 @@ def create_tmp_checksum(path):
               cwd=path, stdout=out).wait()
 
 
-def get_checksum_diff(dir1, dir2, sumfile1, sumfile2):
-    diff = dict()
-    for (change, path) in [line.split(maxsplit=2,
-                                      sep=SEPARATORS[ARGS.method])
-                           for line in str(Popen(['diff',
-                                                  str(dir1 / sumfile1),
-                                                  str(dir2 / sumfile2)],
-                                                 stdout=PIPE).communicate()[0],
-                                           encoding='UTF-8').splitlines()
-                           if line[0] in ['<', '>']]:
-        if path in diff:
-            diff[path] = '* *'
-        else:
-            diff[path] = '< +' if change[0] == '>' else '> -'
-    return diff
+def get_timestamp_diff(prefix, current_dir):
+    result = dict()
+    for file in current_dir.common_files:
+        if not fnmatchcase(file, EXCLUDE_PATTERN):
+            time_a = stat(Path(current_dir.left) / file).st_mtime
+            time_b = stat(Path(current_dir.right) / file).st_mtime
+            if time_a != time_b:
+                print("%s %s %s" % (prefix / file, time_a, time_b))
+                result[prefix / file] = "< =" if time_a < time_b else "> ="
+    for directory in current_dir.subdirs.items():
+        result.update(get_timestamp_diff(prefix / directory[0], directory[1]))
+    return result
 
 
 def report_diff(diff, parent=Path()):
@@ -127,11 +132,18 @@ def report_diff(diff, parent=Path()):
         print("%s %s" % (diff[path], parent / path))
 
 
+def log(text):
+    if not ARGS.quiet:
+        now = datetime.now().replace(microsecond=0).isoformat()
+        print("[%s] %s" % (now, text), flush=True)
+
+
 ARGS = parse_args()
 
 SUM_FILE = 'chdiff.%s.txt' % ARGS.method
 TMP_FILE = 'chdiff.%s.tmp' % ARGS.method
-FIND_BASE = 'find -type f -not -path "./chdiff.*.t??"'
+EXCLUDE_PATTERN = 'chdiff.*.t??'
+FIND_BASE = 'find -type f -not -name "%s"' % EXCLUDE_PATTERN
 
 METHODS = {
     "sha256": "sha256sum -b",
@@ -147,4 +159,5 @@ SEPARATORS = {
     "size": " ./",
 }
 
-main()
+if __name__ == '__main__':
+    main()
