@@ -19,6 +19,8 @@ def parse_args():
     parser.add_argument("-m", "--method", action="store", default="sha256",
                         choices=["sha256", "sha512", "md5", "size"],
                         help="the checksum method to use")
+    parser.add_argument("--debug", action="store_true",
+                        help="show debug output")
 
     cmd_group = parser.add_mutually_exclusive_group(required=True)
     cmd_group.add_argument("-d", "--diff", action="store", nargs=2,
@@ -102,14 +104,14 @@ def create_tmp_checksum(path):
 
 
 def get_checksum_diff(dir1, dir2, sumfile1, sumfile2):
+    diff_output = str(Popen(['diff', str(dir1 / sumfile1), str(dir2 / sumfile2)],
+                            stdout=PIPE).communicate()[0], encoding='UTF-8')
+    if ARGS.debug:
+        print(diff_output)
     diff = dict()
     for (change, path) in [line.split(maxsplit=2,
                                       sep=SEPARATORS[ARGS.method])
-                           for line in str(Popen(['diff',
-                                                  str(dir1 / sumfile1),
-                                                  str(dir2 / sumfile2)],
-                                                 stdout=PIPE).communicate()[0],
-                                           encoding='UTF-8').splitlines()
+                           for line in diff_output.splitlines()
                            if line[0] in ['<', '>']]:
         normalized_path = Path(path)
         if normalized_path in diff:
