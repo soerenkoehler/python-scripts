@@ -19,6 +19,8 @@ def parse_args():
     parser.add_argument("-m", "--method", action="store", default="sha256",
                         choices=["sha256", "sha512", "md5", "size"],
                         help="the checksum method to use")
+    parser.add_argument("--full", action="store_true",
+                        help="show also files with equal checksum but different timestamps")
     parser.add_argument("--debug", action="store_true",
                         help="show debug output")
 
@@ -70,9 +72,9 @@ def get_diff(dir1, dir2, sumfile1, sumfile2):
     process_directory(dir2, create_checksum)
     diff = get_checksum_diff(dir1, dir2, sumfile1, sumfile2)
     for (path, change) in get_timestamp_diff(Path("."), dircmp(dir1, dir2)).items():
-        if path in diff:
-            diff[path] = change + diff[path]
-        else:
+        if ARGS.full:
+            diff[path] = change + (diff[path] if path in diff else [])
+        elif path in diff:
             diff[path] = change
     return diff
 
@@ -86,6 +88,7 @@ def process_directory(directory, function):
 def create_checksum(path):
     create_tmp_checksum(path)
     replace(path / TMP_FILE, path / SUM_FILE)
+    return "created"
 
 
 def verify_checksum(path):
