@@ -177,7 +177,10 @@ def method_md5(file):
 
 def calculate_digest(file, digest):
     with open(file, "rb") as infile:
-        digest.update(infile.read())
+        buffer = infile.read()
+        while buffer:
+            digest.update(buffer)
+            buffer = infile.read()
     return digest.hexdigest()
 
 
@@ -197,6 +200,7 @@ METHODS = {
     "size": method_size,
 }
 
+BUFFER_SIZE = 16 * 1024 * 1024
 TARGET_MODIFIED = "*"
 TARGET_NEWER = "<"
 TARGET_OLDER = ">"
