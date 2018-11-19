@@ -5,9 +5,9 @@ from argparse import ArgumentParser
 from datetime import datetime
 from filecmp import dircmp
 from fnmatch import fnmatchcase
-from os import remove, replace, stat
+from hashlib import md5, sha256, sha512
+from os import stat, walk
 from pathlib import Path
-from subprocess import PIPE, Popen
 from sys import stdout
 
 
@@ -21,8 +21,6 @@ def parse_args():
                         help="the checksum method to use")
     parser.add_argument("--full", action="store_true",
                         help="show also files with equal checksum but different timestamps")
-    parser.add_argument("--debug", action="store_true",
-                        help="show debug output")
 
     cmd_group = parser.add_mutually_exclusive_group(required=True)
     cmd_group.add_argument("-d", "--diff", action="store", nargs=2,
@@ -56,9 +54,8 @@ def main():
             process_directory(current_dir, verify_checksum)
 
     elif ARGS.diff:
-        dir1 = Path(ARGS.diff[0]).resolve()
-        dir2 = Path(ARGS.diff[1]).resolve()
-        report_diff(get_diff(dir1, dir2, SUM_FILE, SUM_FILE))
+        report_diff(get_diff(Path(ARGS.diff[0]).resolve(),
+                             Path(ARGS.diff[1]).resolve()))
 
     elif ARGS.sync:
         pass
@@ -67,10 +64,10 @@ def main():
         pass
 
 
-def get_diff(dir1, dir2, sumfile1, sumfile2):
+def get_diff(dir1, dir2):
     process_directory(dir1, create_checksum)
     process_directory(dir2, create_checksum)
-    diff = get_checksum_diff(dir1, dir2, sumfile1, sumfile2)
+    diff = get_checksum_diff(load_checksums(dir1), load_checksums(dir2))
     for (path, change) in get_timestamp_diff(Path("."), dircmp(dir1, dir2)).items():
         if ARGS.full:
             diff[path] = change + (diff[path] if path in diff else [])
@@ -86,54 +83,66 @@ def process_directory(directory, function):
 
 
 def create_checksum(path):
-    create_tmp_checksum(path)
-    replace(path / TMP_FILE, path / SUM_FILE)
-    return "created"
+    try:
+        checksums = calculate_checksums(path)
+        with open(path / SUM_FILE, "w", encoding="utf-8") as out:
+            out.write("\n".join(
+                ["%s *./%s" % (checksums[f], f) for f in sorted(checksums)]))
+        return "created"
+    except FileNotFoundError as e:
+        print(e.strerror)
+        return "path not found"
 
 
 def verify_checksum(path):
-    create_tmp_checksum(path)
-    diff = get_checksum_diff(path, path, SUM_FILE, TMP_FILE)
-    remove(path / TMP_FILE)
+    diff = get_checksum_diff(load_checksums(path), calculate_checksums(path))
     report_diff(diff, path.resolve())
     return "%s difference(s) found" % len(diff) if diff else "OK"
 
 
-def create_tmp_checksum(path):
-    with open(path / TMP_FILE, "w") as out:
-        Popen(['sh', '-c', '%s | sort | xargs -i %s "{}"' %
-               (FIND_BASE, METHODS[ARGS.method])],
-              cwd=path, stdout=out).wait()
-
-
-def get_checksum_diff(dir1, dir2, sumfile1, sumfile2):
-    diff_output = str(Popen(['diff', str(dir1 / sumfile1), str(dir2 / sumfile2)],
-                            stdout=PIPE).communicate()[0], encoding='UTF-8')
-    if ARGS.debug:
-        print(diff_output)
-    diff = dict()
-    for (change, path) in [line.split(maxsplit=2,
-                                      sep=SEPARATORS[ARGS.method])
-                           for line in diff_output.splitlines()
-                           if line[0] in ['<', '>']]:
-        normalized_path = Path(path)
-        if normalized_path in diff:
-            diff[normalized_path] = [TARGET_MODIFIED]
-        else:
-            diff[normalized_path] = [SOURCE_MISSING if change[0] == '>'
-                                     else TARGET_MISSING]
+def get_checksum_diff(source, target):
+    diff = {}
+    for file in [f for f in source if f in target]:
+        if target[file] != source[file]:
+            diff[file] = TARGET_MODIFIED
+    for file in [f for f in source if f not in target]:
+        diff[file] = TARGET_MISSING
+    for file in [f for f in target if f not in source]:
+        diff[file] = SOURCE_MISSING
     return diff
 
 
+def calculate_checksums(path):
+    checksums = {}
+    for (current, _, files) in walk(path):
+        for file in [Path(current) / f
+                     for f in files
+                     if not fnmatchcase(f, EXCLUDE_PATTERN)]:
+            checksums[str(file.relative_to(path))] = METHODS[ARGS.method](file)
+    return checksums
+
+
+def load_checksums(path):
+    checksums = {}
+    try:
+        with open(path / SUM_FILE, "r", encoding="utf-8") as infile:
+            for (checksum, file) in [line.rstrip().split(maxsplit=2, sep=" *./")
+                                     for line in infile.readlines()]:
+                checksums[str(Path(file))] = checksum
+    except FileNotFoundError:
+        log("file not found", path / SUM_FILE)
+    return checksums
+
+
 def get_timestamp_diff(prefix, current_dir):
-    result = dict()
+    result = {}
     for file in current_dir.common_files:
         if not fnmatchcase(file, EXCLUDE_PATTERN):
             time_a = stat(Path(current_dir.left) / file).st_mtime
             time_b = stat(Path(current_dir.right) / file).st_mtime
             if time_a != time_b:
-                result[prefix /
-                       file] = [TARGET_NEWER if time_a < time_b else TARGET_OLDER]
+                result[str(prefix / file)] = [TARGET_NEWER if time_a < time_b
+                                              else TARGET_OLDER]
     for directory in current_dir.subdirs.items():
         result.update(get_timestamp_diff(prefix / directory[0], directory[1]))
     return result
@@ -157,25 +166,38 @@ def path_to_str(path):
     return bytes(path).decode(stdout.encoding)
 
 
+def method_sha256(file):
+    return calculate_digest(file, sha256())
+
+
+def method_sha512(file):
+    return calculate_digest(file, sha512())
+
+
+def method_md5(file):
+    return calculate_digest(file, md5())
+
+
+def calculate_digest(file, digest):
+    with open(file, "rb") as infile:
+        digest.update(infile.read())
+    return digest.hexdigest()
+
+
+def method_size(file):
+    return str(stat(file).st_size)
+
+
 ARGS = parse_args()
 
 SUM_FILE = 'chdiff.%s.txt' % ARGS.method
-TMP_FILE = 'chdiff.%s.tmp' % ARGS.method
-EXCLUDE_PATTERN = 'chdiff.*.t??'
-FIND_BASE = 'find -type f -not -name "%s"' % EXCLUDE_PATTERN
+EXCLUDE_PATTERN = 'chdiff.*.txt'
 
 METHODS = {
-    "sha256": "sha256sum -b",
-    "sha512": "sha512sum -b",
-    "md5": "md5sum -b",
-    "size": "wc -c",
-}
-
-SEPARATORS = {
-    "sha256": " *./",
-    "sha512": " *./",
-    "md5": " *./",
-    "size": " ./",
+    "sha256": method_sha256,
+    "sha512": method_sha512,
+    "md5": method_md5,
+    "size": method_size,
 }
 
 TARGET_MODIFIED = "*"
