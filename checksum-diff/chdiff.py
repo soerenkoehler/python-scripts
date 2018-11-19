@@ -46,12 +46,10 @@ def parse_args():
 
 def main():
     if ARGS.create:
-        for current_dir in ARGS.create:
-            process_directory(current_dir, create_checksum)
+        process_directories(ARGS.create, create_checksum)
 
     elif ARGS.verify:
-        for current_dir in ARGS.verify:
-            process_directory(current_dir, verify_checksum)
+        process_directories(ARGS.verify, verify_checksum)
 
     elif ARGS.diff:
         report_diff(get_diff(Path(ARGS.diff[0]).resolve(),
@@ -65,33 +63,35 @@ def main():
 
 
 def get_diff(dir1, dir2):
-    process_directory(dir1, create_checksum)
-    process_directory(dir2, create_checksum)
-    diff = get_checksum_diff(load_checksums(dir1), load_checksums(dir2))
-    for (path, change) in get_timestamp_diff(Path("."), dircmp(dir1, dir2)).items():
-        if ARGS.full:
-            diff[path] = change + (diff[path] if path in diff else [])
-        elif path in diff:
-            diff[path] = change
-    return diff
+    if process_directories([dir1, dir2], create_checksum):
+        diff = get_checksum_diff(load_checksums(dir1), load_checksums(dir2))
+        for (path, change) in get_timestamp_diff(Path("."), dircmp(dir1, dir2)).items():
+            if ARGS.full:
+                diff[path] = change + (diff[path] if path in diff else [])
+            elif path in diff:
+                diff[path] = change
+        return diff
+    return {}
 
 
-def process_directory(directory, function):
-    path = Path(directory)
-    log("scanning", path)
-    log(function(path), path / SUM_FILE)
+def process_directories(directories, function):
+    result = True
+    for path in [Path(d) for d in directories]:
+        try:
+            log("scanning", path)
+            log(function(path), path / SUM_FILE)
+        except FileNotFoundError as file_not_found:
+            log("file not found", path / file_not_found.filename)
+            result = False
+    return result
 
 
 def create_checksum(path):
-    try:
-        checksums = calculate_checksums(path)
-        with open(path / SUM_FILE, "w", encoding="utf-8") as out:
-            out.write("\n".join(
-                ["%s *./%s" % (checksums[f], f) for f in sorted(checksums)]))
-        return "created"
-    except FileNotFoundError as e:
-        print(e.strerror)
-        return "path not found"
+    checksums = calculate_checksums(path)
+    with open(path / SUM_FILE, "w", encoding="utf-8") as out:
+        out.write("\n".join(
+            ["%s *./%s" % (checksums[f], f) for f in sorted(checksums)]))
+    return "created"
 
 
 def verify_checksum(path):
@@ -124,13 +124,10 @@ def calculate_checksums(path):
 
 def load_checksums(path):
     checksums = {}
-    try:
-        with open(path / SUM_FILE, "r", encoding="utf-8") as infile:
-            for (checksum, file) in [line.rstrip().split(maxsplit=2, sep=" *./")
-                                     for line in infile.readlines()]:
-                checksums[str(Path(file))] = checksum
-    except FileNotFoundError:
-        log("file not found", path / SUM_FILE)
+    with open(path / SUM_FILE, "r", encoding="utf-8") as infile:
+        for (checksum, file) in [line.rstrip().split(maxsplit=2, sep=" *./")
+                                 for line in infile.readlines()]:
+            checksums[str(Path(file))] = checksum
     return checksums
 
 
