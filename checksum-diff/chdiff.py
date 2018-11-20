@@ -26,12 +26,9 @@ def parse_args():
     cmd_group.add_argument("-d", "--diff", action="store", nargs=2,
                            metavar=("DIR1", "DIR2"),
                            help="compute difference between DIR1 and DIR2")
-    cmd_group.add_argument("-s", "--sync", action="store", nargs=2,
-                           metavar=("SRC", "DST"),
-                           help="sync SRC into DST (new, modified and deleted files)")
     cmd_group.add_argument("-b", "--backup", action="store", nargs=2,
                            metavar=("SRC", "DST"),
-                           help="backup SRC into DST (new and modified files only)")
+                           help="backup SRC into DST")
     cmd_group.add_argument("-c", "--create", action="store", nargs='+',
                            metavar="DIR",
                            help="compute checksums for given DIRs")
@@ -52,14 +49,15 @@ def main():
         process_directories(ARGS.verify, verify_checksum)
 
     elif ARGS.diff:
-        report_diff(get_diff(Path(ARGS.diff[0]).resolve(),
-                             Path(ARGS.diff[1]).resolve()))
-
-    elif ARGS.sync:
-        pass
+        report_diff(get_diff(Path(ARGS.diff[0]),
+                             Path(ARGS.diff[1])))
 
     elif ARGS.backup:
-        pass
+        log("source", Path(ARGS.backup[0]))
+        log("target", Path(ARGS.backup[1]) / Path(ARGS.backup[0]).name)
+        log("history", Path(ARGS.backup[1]) / ("%s.history.%s" %
+                                               (Path(ARGS.backup[0]).name,
+                                                now_for_filename())))
 
 
 def get_diff(dir1, dir2):
@@ -67,10 +65,14 @@ def get_diff(dir1, dir2):
         diff = get_checksum_diff(load_checksums(dir1), load_checksums(dir2))
         for (path, change) in get_timestamp_diff(Path("."), dircmp(dir1, dir2)).items():
             if ARGS.full:
-                diff[path] = change + (diff[path] if path in diff else [])
+                if path in diff:
+                    diff[path] = change + [diff[path]]
+                else:
+                    diff[path] = change
             elif path in diff:
                 diff[path] = change
         return diff
+    log("could not compare directories")
     return {}
 
 
@@ -114,12 +116,16 @@ def get_checksum_diff(source, target):
 
 def calculate_checksums(path):
     checksums = {}
-    for (current, _, files) in walk(path):
+    for (current, _, files) in walk(path, onerror=lambda e: reraise(e)):
         for file in [Path(current) / f
                      for f in files
                      if not fnmatchcase(f, EXCLUDE_PATTERN)]:
             checksums[str(file.relative_to(path))] = METHODS[ARGS.method](file)
     return checksums
+
+
+def reraise(exception):
+    raise exception
 
 
 def load_checksums(path):
@@ -155,12 +161,19 @@ def log(text, path=None):
     if not ARGS.quiet:
         if path:
             text = "%s : %s" % (text, path_to_str(path.resolve()))
-        now = datetime.now().replace(microsecond=0).isoformat()
-        print("[{}] {}".format(now, text), flush=True)
+        print("[{}] {}".format(now_for_log(), text), flush=True)
 
 
 def path_to_str(path):
     return bytes(path).decode(stdout.encoding)
+
+
+def now_for_log():
+    return datetime.now().strftime(r"%Y-%m-%d %H:%M:%S")
+
+
+def now_for_filename():
+    return datetime.now().strftime(r"%Y%m%d-%H%M%S")
 
 
 def method_sha256(file):
