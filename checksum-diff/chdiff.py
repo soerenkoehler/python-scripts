@@ -1,70 +1,115 @@
 #!/usr/bin/env python3
 # pylint: disable=C0111
 
-from argparse import ArgumentParser
+from argparse import ArgumentParser, Namespace
 from datetime import datetime
 from filecmp import dircmp
 from fnmatch import fnmatchcase
 from hashlib import md5, sha256, sha512
-from os import stat, walk
+from os import stat, walk, listdir, makedirs
 from pathlib import Path
-from sys import stdout
+from sys import stdout, stderr
+from time import sleep
 
 
 def parse_args():
-    parser = ArgumentParser(description="ChDiff - a checksum based diff tool")
+    parser = ArgumentParser(description="ChDiff - a checksum based diff tool",
+                            epilog="Global options must precede sub-commands.")
 
     parser.add_argument("-q", "--quiet", action="store_true",
                         help="dont print log messages")
     parser.add_argument("-m", "--method", action="store", default="sha256",
                         choices=["sha256", "sha512", "md5", "size"],
                         help="the checksum method to use")
-    parser.add_argument("--full", action="store_true",
-                        help="show also files with equal checksum but different timestamps")
 
-    cmd_group = parser.add_mutually_exclusive_group(required=True)
-    cmd_group.add_argument("-d", "--diff", action="store", nargs=2,
-                           metavar=("DIR1", "DIR2"),
-                           help="compute difference between DIR1 and DIR2")
-    cmd_group.add_argument("-b", "--backup", action="store", nargs=2,
-                           metavar=("SRC", "DST"),
-                           help="backup SRC into DST")
-    cmd_group.add_argument("-c", "--create", action="store", nargs='+',
-                           metavar="DIR",
-                           help="compute checksums for given DIRs")
-    cmd_group.add_argument("-v", "--verify", action="store", nargs='+',
-                           metavar="DIR",
-                           help="verify checksums for given DIRs")
+    subparsers = parser.add_subparsers(
+        title="commands",
+        help="use '%(prog)s CMD -h' for additional help")
+    diff = subparsers.add_parser("diff", aliases=["d"],
+                                 help="compute difference between two directories")
+    diff.add_argument("left", type=Path, action="store", metavar="LEFT",
+                      help="first directory to compare")
+    diff.add_argument("right", type=Path, action="store", metavar="RIGHT",
+                      help="second directory to compare")
+    diff.add_argument("-t", "--timestamps", action="store_true",
+                      help="show also files with equal checksum but different timestamps")
+    diff.set_defaults(cmd=cmd_diff)
+
+    backup = subparsers.add_parser("backup", aliases=["b"],
+                                   help="make backup of a directory")
+    backup.add_argument("source", type=Path, action="store", metavar="SRC",
+                        help="source directory to backup")
+    backup.add_argument("target", type=Path, action="store", metavar="DST",
+                        help="target directory where backups are created")
+    backup.add_argument("-f", "--full", action="store_true",
+                        help="make a full backup")
+    backup.set_defaults(cmd=cmd_backup)
+
+    create = subparsers.add_parser("create", aliases=["c"],
+                                   help="create the checksum files for directories")
+    create.add_argument("dir", type=Path, action="store", nargs='+', metavar="DIR",
+                        help="list of directories for which to compute checksums")
+    create.set_defaults(cmd=cmd_create)
+
+    verify = subparsers.add_parser("verify", aliases=["v"],
+                                   help="verify the checksum files for directories")
+    verify.add_argument("dir", type=Path, action="store", nargs='+', metavar="DIR",
+                        help="list of directories for which to verify checksums")
+    verify.set_defaults(cmd=cmd_verify)
 
     args = parser.parse_args()
 
     return args
 
 
-def main():
-    if ARGS.create:
-        process_directories(ARGS.create, create_checksum)
+def cmd_diff():
+    report_diff(get_diff(ARGS.left, ARGS.right))
 
-    elif ARGS.verify:
-        process_directories(ARGS.verify, verify_checksum)
 
-    elif ARGS.diff:
-        report_diff(get_diff(Path(ARGS.diff[0]),
-                             Path(ARGS.diff[1])))
+def cmd_backup():
+    create_backup(ARGS.source, ARGS.target)
 
-    elif ARGS.backup:
-        log("source", Path(ARGS.backup[0]))
-        log("target", Path(ARGS.backup[1]) / Path(ARGS.backup[0]).name)
-        log("history", Path(ARGS.backup[1]) / ("%s.history.%s" %
-                                               (Path(ARGS.backup[0]).name,
-                                                now_for_filename())))
+
+def cmd_create():
+    process_directories(ARGS.dir, create_checksum)
+
+
+def cmd_verify():
+    process_directories(ARGS.dir, verify_checksum)
+
+
+def create_backup(source, target):
+    try:
+        rel_path = source.resolve().relative_to(target.resolve())
+        log("ABORTING : source must not be a sub-path of target", rel_path)
+        return
+    except:
+        pass
+
+    sub_target = target / source.name
+    if not sub_target.exists():
+        makedirs(sub_target)
+
+    history = sorted(listdir(sub_target))
+    if history:
+        previous = sub_target / history[-1]
+        log("using history", previous)
+    else:
+        previous = None
+        log("no history found")
+
+    while now_for_filename() == previous.name:
+        sleep(1)
+    current = sub_target / now_for_filename()
+    log("create backup", current)
+    makedirs(current)
 
 
 def get_diff(dir1, dir2):
     if process_directories([dir1, dir2], create_checksum):
         diff = get_checksum_diff(load_checksums(dir1), load_checksums(dir2))
-        for (path, change) in get_timestamp_diff(Path("."), dircmp(dir1, dir2)).items():
-            if ARGS.full:
+        for (path, change) in get_timestamp_diff(dircmp(dir1, dir2)).items():
+            if ARGS.timestamps:
                 if path in diff:
                     diff[path] = change + [diff[path]]
                 else:
@@ -118,9 +163,11 @@ def calculate_checksums(path):
     checksums = {}
     for (current, _, files) in walk(path, onerror=lambda e: reraise(e)):
         for file in [Path(current) / f
-                     for f in files
-                     if not fnmatchcase(f, EXCLUDE_PATTERN)]:
-            checksums[str(file.relative_to(path))] = METHODS[ARGS.method](file)
+                     for f in files]:
+                    #  if not fnmatchcase(f, EXCLUDE_PATTERN)]:  # TODO
+            file_subpath = str(file.relative_to(path))
+            if not fnmatchcase(file_subpath, EXCLUDE_PATTERN):
+                checksums[file_subpath] = METHODS[ARGS.method](file)
     return checksums
 
 
@@ -137,17 +184,17 @@ def load_checksums(path):
     return checksums
 
 
-def get_timestamp_diff(prefix, current_dir):
+def get_timestamp_diff(comparison, prefix=Path(".")):
     result = {}
-    for file in current_dir.common_files:
-        if not fnmatchcase(file, EXCLUDE_PATTERN):
-            time_a = stat(Path(current_dir.left) / file).st_mtime
-            time_b = stat(Path(current_dir.right) / file).st_mtime
+    for file in comparison.common_files:
+        if not (prefix == Path(".") and fnmatchcase(file, EXCLUDE_PATTERN)):  # TODO
+            time_a = stat(Path(comparison.left) / file).st_mtime
+            time_b = stat(Path(comparison.right) / file).st_mtime
             if time_a != time_b:
                 result[str(prefix / file)] = [TARGET_NEWER if time_a < time_b
                                               else TARGET_OLDER]
-    for directory in current_dir.subdirs.items():
-        result.update(get_timestamp_diff(prefix / directory[0], directory[1]))
+    for (sub_dir, sub_comparison) in comparison.subdirs.items():
+        result.update(get_timestamp_diff(sub_comparison, prefix / sub_dir))
     return result
 
 
@@ -201,24 +248,24 @@ def method_size(file):
     return str(stat(file).st_size)
 
 
-ARGS = parse_args()
-
-SUM_FILE = 'chdiff.%s.txt' % ARGS.method
-EXCLUDE_PATTERN = 'chdiff.*.txt'
-
-METHODS = {
-    "sha256": method_sha256,
-    "sha512": method_sha512,
-    "md5": method_md5,
-    "size": method_size,
-}
-
-BUFFER_SIZE = 16 * 1024 * 1024
-TARGET_MODIFIED = "*"
-TARGET_NEWER = "<"
-TARGET_OLDER = ">"
-TARGET_MISSING = "-"
-SOURCE_MISSING = "+"
-
 if __name__ == '__main__':
-    main()
+    ARGS = parse_args()
+
+    SUM_FILE = 'chdiff.%s.txt' % ARGS.method
+    EXCLUDE_PATTERN = 'chdiff.*.txt'
+
+    BUFFER_SIZE = 16 * 1024 * 1024
+    TARGET_MODIFIED = "*"
+    TARGET_NEWER = "<"
+    TARGET_OLDER = ">"
+    TARGET_MISSING = "-"
+    SOURCE_MISSING = "+"
+
+    METHODS = {
+        "sha256": method_sha256,
+        "sha512": method_sha512,
+        "md5": method_md5,
+        "size": method_size,
+    }
+
+    ARGS.cmd()
