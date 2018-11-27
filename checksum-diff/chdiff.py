@@ -6,15 +6,17 @@ from datetime import datetime
 from filecmp import dircmp
 from fnmatch import fnmatchcase
 from hashlib import md5, sha256, sha512
-from os import stat, walk, listdir, makedirs
+from os import listdir, makedirs, stat, walk
 from pathlib import Path
-from sys import stdout, stderr
+from sys import stderr, stdout
 from time import sleep
 
 
 def parse_args():
     parser = ArgumentParser(description="ChDiff - a checksum based diff tool",
                             epilog="Global options must precede sub-commands.")
+
+    parser.set_defaults(cmd=parser.print_help)
 
     parser.add_argument("-q", "--quiet", action="store_true",
                         help="dont print log messages")
@@ -25,6 +27,7 @@ def parse_args():
     subparsers = parser.add_subparsers(
         title="commands",
         help="use '%(prog)s CMD -h' for additional help")
+
     diff = subparsers.add_parser("diff", aliases=["d"],
                                  help="compute difference between two directories")
     diff.add_argument("left", type=Path, action="store", metavar="LEFT",
@@ -46,15 +49,15 @@ def parse_args():
     backup.set_defaults(cmd=cmd_backup)
 
     create = subparsers.add_parser("create", aliases=["c"],
-                                   help="create the checksum files for directories")
+                                   help="create the checksum files for a list of directories")
     create.add_argument("dir", type=Path, action="store", nargs='+', metavar="DIR",
-                        help="list of directories for which to compute checksums")
+                        help="a directorie-path to compute checksums for")
     create.set_defaults(cmd=cmd_create)
 
     verify = subparsers.add_parser("verify", aliases=["v"],
-                                   help="verify the checksum files for directories")
+                                   help="verify the checksum files for a list of directories")
     verify.add_argument("dir", type=Path, action="store", nargs='+', metavar="DIR",
-                        help="list of directories for which to verify checksums")
+                        help="a directorie-path to verify checksums for")
     verify.set_defaults(cmd=cmd_verify)
 
     args = parser.parse_args()
@@ -90,19 +93,38 @@ def create_backup(source, target):
     if not sub_target.exists():
         makedirs(sub_target)
 
-    history = sorted(listdir(sub_target))
-    if history:
-        previous = sub_target / history[-1]
-        log("using history", previous)
-    else:
-        previous = None
-        log("no history found")
+    previous, previous_checksums = load_previous(sub_target)
 
-    while now_for_filename() == previous.name:
-        sleep(1)
     current = sub_target / now_for_filename()
     log("create backup", current)
     makedirs(current)
+
+    diff = get_checksum_diff(previous_checksums, calculate_checksums(source))
+    for entry in diff:
+        print(diff[entry], entry)
+
+
+def load_previous(sub_target):
+    previous, previous_checksums = None, {}
+
+    history = sorted(listdir(sub_target))
+    if history:
+        previous = sub_target / history[-1]
+
+        try:
+            previous_checksums = load_checksums(previous)
+        except FileNotFoundError as file_not_found:
+            log("file not found", previous / file_not_found.filename)
+
+        # avoid name collision
+        while now_for_filename() == previous.name:
+            sleep(1)
+
+        log("using history", previous)
+    else:
+        log("no history found")
+
+    return previous, previous_checksums
 
 
 def get_diff(dir1, dir2):
