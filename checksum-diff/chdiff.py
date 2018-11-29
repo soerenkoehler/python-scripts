@@ -10,19 +10,14 @@ from os import listdir, makedirs, stat, walk
 from pathlib import Path
 from sys import stderr, stdout
 from time import sleep
+from shutil import copy2, move
 
 
 def parse_args():
-    parser = ArgumentParser(description="ChDiff - a checksum based diff tool",
-                            epilog="Global options must precede sub-commands.")
+    parser = ArgumentParser(
+        description="ChDiff - a checksum based diff and backup tool")
 
     parser.set_defaults(cmd=parser.print_help)
-
-    parser.add_argument("-q", "--quiet", action="store_true",
-                        help="dont print log messages")
-    parser.add_argument("-m", "--method", action="store", default="sha256",
-                        choices=["sha256", "sha512", "md5", "size"],
-                        help="the checksum method to use")
 
     subparsers = parser.add_subparsers(
         title="commands",
@@ -60,6 +55,18 @@ def parse_args():
                         help="a directorie-path to verify checksums for")
     verify.set_defaults(cmd=cmd_verify)
 
+    for p in [diff, backup, create, verify]:
+        p.set_defaults(quiet=0)
+        p.add_argument("-q", "--quiet", dest="quiet",
+                       action="store_const", const=1,
+                       help="dont print progress info")
+        p.add_argument("-qq", "--very-quiet", dest="quiet",
+                       action="store_const", const=2,
+                       help="dont print warnings")
+        p.add_argument("-m", "--method", action="store", default="sha256",
+                       choices=["sha256", "sha512", "md5", "size"],
+                       help="the checksum method to use")
+
     args = parser.parse_args()
 
     return args
@@ -84,7 +91,7 @@ def cmd_verify():
 def create_backup(source, target):
     try:
         rel_path = source.resolve().relative_to(target.resolve())
-        log("ABORTING : source must not be a sub-path of target", rel_path)
+        log("ABORTING : source must not be a sub-path of target", rel_path, level=3)
         return
     except:
         pass
@@ -95,36 +102,51 @@ def create_backup(source, target):
 
     previous, previous_checksums = load_previous(sub_target)
 
-    current = sub_target / now_for_filename()
+    current = sub_target / \
+        now_for_filename(previous.name if previous else None)
     log("create backup", current)
     makedirs(current)
 
-    diff = get_checksum_diff(previous_checksums, calculate_checksums(source))
-    for entry in diff:
-        print(diff[entry], entry)
+    process_directories([source], create_checksum)
+
+    diff = get_checksum_diff(calculate_checksums(source),
+                             previous_checksums, True)
+    cnt_new, cnt_same, cnt_delete = 0, 0, 0
+    for (file, change) in diff.items():
+        dst = current / file
+        if change == BOTH_EQUAL:
+            if not dst.parent.exists():
+                makedirs(dst.parent)
+            move(previous / file, dst)
+            cnt_same += 1
+        elif change == TARGET_MISSING:
+            if not dst.parent.exists():
+                makedirs(dst.parent)
+            copy2(source / file, dst)
+            cnt_new += 1
+        else:
+            cnt_delete += 1
+    copy2(source / resolve_sum_file(), current / resolve_sum_file())
+    log("    new files: %s" % cnt_new, level=2)
+    log("   same files: %s" % cnt_same, level=2)
+    log("deleted files: %s" % cnt_delete, level=2)
 
 
 def load_previous(sub_target):
-    previous, previous_checksums = None, {}
-
     history = sorted(listdir(sub_target))
     if history:
         previous = sub_target / history[-1]
+        log("using history", previous)
 
         try:
-            previous_checksums = load_checksums(previous)
+            return previous, load_checksums(previous)
         except FileNotFoundError as file_not_found:
-            log("file not found", previous / file_not_found.filename)
-
-        # avoid name collision
-        while now_for_filename() == previous.name:
-            sleep(1)
-
-        log("using history", previous)
+            log("file not found", Path(file_not_found.filename), level=2)
     else:
-        log("no history found")
+        log("no history found", level=2)
 
-    return previous, previous_checksums
+    log("making full backup")
+    return None, {}
 
 
 def get_diff(dir1, dir2):
@@ -139,7 +161,7 @@ def get_diff(dir1, dir2):
             elif path in diff:
                 diff[path] = change
         return diff
-    log("could not compare directories")
+    log("could not compare directories", level=2)
     return {}
 
 
@@ -148,16 +170,16 @@ def process_directories(directories, function):
     for path in [Path(d) for d in directories]:
         try:
             log("scanning", path)
-            log(function(path), path / SUM_FILE)
+            log(function(path), path / resolve_sum_file(), level=2)
         except FileNotFoundError as file_not_found:
-            log("file not found", path / file_not_found.filename)
+            log("file not found", Path(file_not_found.filename), level=2)
             result = False
     return result
 
 
 def create_checksum(path):
     checksums = calculate_checksums(path)
-    with open(path / SUM_FILE, "w", encoding="utf-8") as out:
+    with open(path / resolve_sum_file(), "w", encoding="utf-8") as out:
         out.write("\n".join(
             ["%s *./%s" % (checksums[f], f) for f in sorted(checksums)]))
     return "created"
@@ -169,10 +191,13 @@ def verify_checksum(path):
     return "%s difference(s) found" % len(diff) if diff else "OK"
 
 
-def get_checksum_diff(source, target):
+def get_checksum_diff(source, target, report_equals=False):
     diff = {}
     for file in [f for f in source if f in target]:
-        if target[file] != source[file]:
+        if target[file] == source[file]:
+            if report_equals:
+                diff[file] = BOTH_EQUAL
+        else:
             diff[file] = TARGET_MODIFIED
     for file in [f for f in source if f not in target]:
         diff[file] = TARGET_MISSING
@@ -186,7 +211,6 @@ def calculate_checksums(path):
     for (current, _, files) in walk(path, onerror=lambda e: reraise(e)):
         for file in [Path(current) / f
                      for f in files]:
-                    #  if not fnmatchcase(f, EXCLUDE_PATTERN)]:  # TODO
             file_subpath = str(file.relative_to(path))
             if not fnmatchcase(file_subpath, EXCLUDE_PATTERN):
                 checksums[file_subpath] = METHODS[ARGS.method](file)
@@ -199,7 +223,7 @@ def reraise(exception):
 
 def load_checksums(path):
     checksums = {}
-    with open(path / SUM_FILE, "r", encoding="utf-8") as infile:
+    with open(path / resolve_sum_file(), "r", encoding="utf-8") as infile:
         for (checksum, file) in [line.rstrip().split(maxsplit=2, sep=" *./")
                                  for line in infile.readlines()]:
             checksums[str(Path(file))] = checksum
@@ -226,10 +250,10 @@ def report_diff(diff, parent=Path()):
                                 path_to_str(parent / path)))
 
 
-def log(text, path=None):
-    if not ARGS.quiet:
+def log(text, path=None, level=1):
+    if level > ARGS.quiet:
         if path:
-            text = "%s : %s" % (text, path_to_str(path.resolve()))
+            text = "{} : {}".format(text, path_to_str(path.resolve()))
         print("[{}] {}".format(now_for_log(), text), flush=True)
 
 
@@ -237,12 +261,19 @@ def path_to_str(path):
     return bytes(path).decode(stdout.encoding)
 
 
+def now_for_filename(avoid_this_name):
+    result = now_formatted(r"%Y%m%d-%H%M%S")
+    while result == avoid_this_name:
+        sleep(1)
+    return result
+
+
 def now_for_log():
-    return datetime.now().strftime(r"%Y-%m-%d %H:%M:%S")
+    return now_formatted(r"%Y-%m-%d %H:%M:%S")
 
 
-def now_for_filename():
-    return datetime.now().strftime(r"%Y%m%d-%H%M%S")
+def now_formatted(pattern):
+    return datetime.now().strftime(pattern)
 
 
 def method_sha256(file):
@@ -270,24 +301,30 @@ def method_size(file):
     return str(stat(file).st_size)
 
 
+def resolve_sum_file():
+    return SUM_FILE % ARGS.method
+
+
+SUM_FILE = 'chdiff.%s.txt'
+EXCLUDE_PATTERN = 'chdiff.*.txt'
+
+BUFFER_SIZE = 16 * 1024 * 1024
+
+BOTH_EQUAL = "="
+TARGET_MODIFIED = "*"
+TARGET_NEWER = "<"
+TARGET_OLDER = ">"
+TARGET_MISSING = "-"
+SOURCE_MISSING = "+"
+
+METHODS = {
+    "sha256": method_sha256,
+    "sha512": method_sha512,
+    "md5": method_md5,
+    "size": method_size,
+}
+
+
 if __name__ == '__main__':
     ARGS = parse_args()
-
-    SUM_FILE = 'chdiff.%s.txt' % ARGS.method
-    EXCLUDE_PATTERN = 'chdiff.*.txt'
-
-    BUFFER_SIZE = 16 * 1024 * 1024
-    TARGET_MODIFIED = "*"
-    TARGET_NEWER = "<"
-    TARGET_OLDER = ">"
-    TARGET_MISSING = "-"
-    SOURCE_MISSING = "+"
-
-    METHODS = {
-        "sha256": method_sha256,
-        "sha512": method_sha512,
-        "md5": method_md5,
-        "size": method_size,
-    }
-
     ARGS.cmd()
