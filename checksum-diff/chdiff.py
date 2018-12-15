@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # pylint: disable=C0111
 
-from argparse import ArgumentParser
+from argparse import ArgumentParser, RawDescriptionHelpFormatter
 from datetime import datetime
 from filecmp import dircmp
 from fnmatch import fnmatchcase
@@ -12,10 +12,19 @@ from sys import stdout
 from time import sleep
 from shutil import copy2, move
 
+DESCRIPTION = """
+ChDiff - a checksum based diff and backup tool
+----------------------------------------------"""
+EPILOG = """
+-----------------------------------------------
+https://github.com/soerenkoehler/python-scripts
+Build 2018-12-15 23:28:35"""
+
 
 def parse_args():
-    parser = ArgumentParser(
-        description="ChDiff - a checksum based diff and backup tool")
+    parser = ArgumentParser(formatter_class=RawDescriptionHelpFormatter,
+                            description=DESCRIPTION,
+                            epilog=EPILOG)
 
     parser.set_defaults(cmd=parser.print_help)
 
