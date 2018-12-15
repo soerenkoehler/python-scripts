@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # pylint: disable=C0111
 
-from argparse import ArgumentParser, Namespace
+from argparse import ArgumentParser
 from datetime import datetime
 from filecmp import dircmp
 from fnmatch import fnmatchcase
 from hashlib import md5, sha256, sha512
 from os import listdir, makedirs, stat, walk
 from pathlib import Path
-from sys import stderr, stdout
+from sys import stdout
 from time import sleep
 from shutil import copy2, move
 
@@ -55,17 +55,17 @@ def parse_args():
                         help="a directorie-path to verify checksums for")
     verify.set_defaults(cmd=cmd_verify)
 
-    for p in [diff, backup, create, verify]:
-        p.set_defaults(quiet=0)
-        p.add_argument("-q", "--quiet", dest="quiet",
-                       action="store_const", const=1,
-                       help="dont print progress info")
-        p.add_argument("-qq", "--very-quiet", dest="quiet",
-                       action="store_const", const=2,
-                       help="dont print warnings")
-        p.add_argument("-m", "--method", action="store", default="sha256",
-                       choices=["sha256", "sha512", "md5", "size"],
-                       help="the checksum method to use")
+    for sub_parser in [diff, backup, create, verify]:
+        sub_parser.set_defaults(quiet=0)
+        sub_parser.add_argument("-q", "--quiet", dest="quiet",
+                                action="store_const", const=1,
+                                help="dont print progress info")
+        sub_parser.add_argument("-qq", "--very-quiet", dest="quiet",
+                                action="store_const", const=2,
+                                help="dont print warnings")
+        sub_parser.add_argument("-m", "--method", action="store", default="sha256",
+                                choices=["sha256", "sha512", "md5", "size"],
+                                help="the checksum method to use")
 
     args = parser.parse_args()
 
@@ -93,7 +93,7 @@ def create_backup(source, target):
         rel_path = source.resolve().relative_to(target.resolve())
         log("ABORTING : source must not be a sub-path of target", rel_path, level=3)
         return
-    except:
+    except:  # pylint: disable=w0702
         pass
 
     sub_target = target / source.name
@@ -208,17 +208,16 @@ def get_checksum_diff(source, target, report_equals=False):
 
 def calculate_checksums(path):
     checksums = {}
-    for (current, _, files) in walk(path, onerror=lambda e: reraise(e)):
+    for (current, _, files) in walk(path, onerror=print):
         for file in [Path(current) / f
                      for f in files]:
-            file_subpath = str(file.relative_to(path))
+            file_subpath = str(file.relative_to(path).as_posix())
             if not fnmatchcase(file_subpath, EXCLUDE_PATTERN):
-                checksums[file_subpath] = METHODS[ARGS.method](file)
+                try:
+                    checksums[file_subpath] = METHODS[ARGS.method](file)
+                except (PermissionError, IOError) as error:
+                    print(error)
     return checksums
-
-
-def reraise(exception):
-    raise exception
 
 
 def load_checksums(path):
@@ -226,14 +225,14 @@ def load_checksums(path):
     with open(path / resolve_sum_file(), "r", encoding="utf-8") as infile:
         for (checksum, file) in [line.rstrip().split(maxsplit=2, sep=" *./")
                                  for line in infile.readlines()]:
-            checksums[str(Path(file))] = checksum
+            checksums[str(Path(file).as_posix())] = checksum
     return checksums
 
 
 def get_timestamp_diff(comparison, prefix=Path(".")):
     result = {}
     for file in comparison.common_files:
-        if not (prefix == Path(".") and fnmatchcase(file, EXCLUDE_PATTERN)):  # TODO
+        if not (prefix == Path(".") and fnmatchcase(file, EXCLUDE_PATTERN)):
             time_a = stat(Path(comparison.left) / file).st_mtime
             time_b = stat(Path(comparison.right) / file).st_mtime
             if time_a != time_b:
