@@ -14,11 +14,14 @@ from shutil import copy2, move
 
 DESCRIPTION = """
 ChDiff - a checksum based diff and backup tool
-----------------------------------------------"""
+----------------------------------------------
+"""
 EPILOG = """
 -----------------------------------------------
 https://github.com/soerenkoehler/python-scripts
-Build 2018-12-15 23:28:35"""
+requires Python 3.5
+Build 2018-12-18 01:49:56
+"""
 
 
 def parse_args():
@@ -149,8 +152,8 @@ def load_previous(sub_target):
 
         try:
             return previous, load_checksums(previous)
-        except FileNotFoundError as file_not_found:
-            log("file not found", Path(file_not_found.filename), level=2)
+        except FileNotFoundError as error:
+            log("file not found", Path(error.filename), level=2)
     else:
         log("no history found", level=2)
 
@@ -180,15 +183,15 @@ def process_directories(directories, function):
         try:
             log("scanning", path)
             log(function(path), path / resolve_sum_file(), level=2)
-        except FileNotFoundError as file_not_found:
-            log("file not found", Path(file_not_found.filename), level=2)
+        except FileNotFoundError as error:
+            log("file not found", Path(error.filename), level=2)
             result = False
     return result
 
 
 def create_checksum(path):
     checksums = calculate_checksums(path)
-    with open(path / resolve_sum_file(), "w", encoding="utf-8") as out:
+    with open(str(path / resolve_sum_file()), "w", encoding="utf-8") as out:
         out.write("\n".join(
             ["%s *./%s" % (checksums[f], f) for f in sorted(checksums)]))
     return "created"
@@ -217,7 +220,7 @@ def get_checksum_diff(source, target, report_equals=False):
 
 def calculate_checksums(path):
     checksums = {}
-    for (current, _, files) in walk(path, onerror=print):
+    for (current, _, files) in walk(str(path), onerror=print):
         for file in [Path(current) / f
                      for f in files]:
             file_subpath = str(file.relative_to(path).as_posix())
@@ -225,16 +228,20 @@ def calculate_checksums(path):
                 try:
                     checksums[file_subpath] = METHODS[ARGS.method](file)
                 except (PermissionError, IOError) as error:
-                    print(error)
+                    log("error reading file", Path(error.filename), level=2)
     return checksums
 
 
 def load_checksums(path):
     checksums = {}
-    with open(path / resolve_sum_file(), "r", encoding="utf-8") as infile:
-        for (checksum, file) in [line.rstrip().split(maxsplit=2, sep=" *./")
-                                 for line in infile.readlines()]:
-            checksums[str(Path(file).as_posix())] = checksum
+    sum_file = path / resolve_sum_file()
+    try:
+        with open(sum_file, "r", encoding="utf-8") as infile:
+            for (checksum, file) in [line.rstrip().split(maxsplit=2, sep=" *./")
+                                     for line in infile.readlines()]:
+                checksums[str(Path(file).as_posix())] = checksum
+    except:  # pylint: disable=w0702
+        log("error reading file", sum_file, level=2)
     return checksums
 
 
@@ -261,7 +268,12 @@ def report_diff(diff, parent=Path()):
 def log(text, path=None, level=1):
     if level > ARGS.quiet:
         if path:
-            text = "{} : {}".format(text, path_to_str(path.resolve()))
+            # try-except-clause for compatibility with Python 3.5
+            try:
+                resolved_path = path.resolve()
+            except FileNotFoundError:
+                resolved_path = path
+            text = "{} : {}".format(text, path_to_str(resolved_path))
         print("[{}] {}".format(now_for_log(), text), flush=True)
 
 
@@ -297,7 +309,7 @@ def method_md5(file):
 
 
 def calculate_digest(file, digest):
-    with open(file, "rb") as infile:
+    with open(str(file), "rb") as infile:
         buffer = infile.read()
         while buffer:
             digest.update(buffer)
