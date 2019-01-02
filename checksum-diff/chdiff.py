@@ -19,8 +19,8 @@ ChDiff - a checksum based diff and backup tool
 EPILOG = """
 -----------------------------------------------
 https://github.com/soerenkoehler/python-scripts
-requires Python 3.5
 Build 2018-12-18 01:49:56
+(requires Python 3.6+)
 """
 
 
@@ -191,7 +191,7 @@ def process_directories(directories, function):
 
 def create_checksum(path):
     checksums = calculate_checksums(path)
-    with open(str(path / resolve_sum_file()), "w", encoding="utf-8") as out:
+    with open(path / resolve_sum_file(), "w", encoding="utf-8") as out:
         out.write("\n".join(
             ["%s *./%s" % (checksums[f], f) for f in sorted(checksums)]))
     return "created"
@@ -220,7 +220,7 @@ def get_checksum_diff(source, target, report_equals=False):
 
 def calculate_checksums(path):
     checksums = {}
-    for (current, _, files) in walk(str(path), onerror=print):
+    for (current, _, files) in walk(path, onerror=print):
         for file in [Path(current) / f
                      for f in files]:
             file_subpath = str(file.relative_to(path).as_posix())
@@ -309,7 +309,7 @@ def method_md5(file):
 
 
 def calculate_digest(file, digest):
-    with open(str(file), "rb") as infile:
+    with open(file, "rb") as infile:
         buffer = infile.read()
         while buffer:
             digest.update(buffer)
