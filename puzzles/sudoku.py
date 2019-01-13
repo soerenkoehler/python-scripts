@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+#pylint: disable=C0111
 
 from copy import deepcopy
 
